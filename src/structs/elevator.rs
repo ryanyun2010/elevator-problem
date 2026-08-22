@@ -36,6 +36,6 @@ impl Elevator {
     }
     pub fn set_state(&mut self, state: ElevatorState) {
         self.state = state;
-        self.time_left_in_action = state.duration();
+        self.time_left_in_action = state.duration() - 1;
     }
 }

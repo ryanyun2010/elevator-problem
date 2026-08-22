@@ -1,6 +1,5 @@
 use crate::structs::{
-    elevator::{Elevator, ElevatorState},
-    worker::Worker,
+    elevator::{Elevator, ElevatorState}, hyper_simulation::ElevatorAssignment, worker::Worker,
 };
 use crate::ELEVATOR_CAPACITY;
 
@@ -11,18 +10,18 @@ pub struct Simulation {
     cur_time: isize, // seconds since 8:00, 3600 seconds = 9:00
     workers_waiting: Vec<usize>, // indices of workers waiting for an elevator
     workers_clocked_in: usize, // number of workers who have clocked in
-    last_worker_arrived: Option<isize>, // time the last worker arrived, None if no workers have arrived yet
+    elevator_assignments: Option<ElevatorAssignment>, // indices of workers assigned to each elevator
 }
 
 impl Simulation {
-    pub fn new(workers: Vec<Worker>, elevators: Vec<Elevator>) -> Simulation {
+    pub fn new(workers: Vec<Worker>, elevators: Vec<Elevator>, elevator_assignments: Option<ElevatorAssignment>) -> Simulation {
         Simulation {
             elevators,
             workers,
             cur_time: 0,
             workers_waiting: Vec::new(),
             workers_clocked_in: 0,
-            last_worker_arrived: None,
+            elevator_assignments
         }
     }
 
@@ -36,13 +35,39 @@ impl Simulation {
 
         self.workers_waiting.clear();
         self.workers.sort_by(|a, b| a.arrival_time.cmp(&b.arrival_time));
+        if self.elevator_assignments.is_some() {
+            self.assign_elevators();
+        }
         for (i, worker) in self.workers.iter().enumerate() {
             if worker.arrival_time <= 0 {
                 self.workers_waiting.push(i);
-                self.last_worker_arrived = Some(worker.arrival_time);
             } else {
                 break;
             }
+        }
+    }
+    pub fn assign_elevators(&mut self) {
+        let mut eve = self.elevator_assignments.as_ref().unwrap().clone();
+        for worker in self.workers.iter_mut().enumerate() {
+            let flooreve: &mut Vec<usize> = match worker.1.target_floor {
+                1 => eve.floor_1_assigned.as_mut(),
+                2 => eve.floor_2_assigned.as_mut(),
+                3 => eve.floor_3_assigned.as_mut(),
+                4 => eve.floor_4_assigned.as_mut(),
+                5 => eve.floor_5_assigned.as_mut(),
+                6 => eve.floor_6_assigned.as_mut(),
+                _ => panic!("Invalid floor number"),
+            };
+            for (elevator_index, ppl) in flooreve.iter_mut().enumerate() {
+                if *ppl > 0 {
+                    worker.1.elevator_assignment = Some(elevator_index);
+                    *ppl -= 1;
+                    break;
+                } else {
+                    continue;
+                }
+            }
+            
         }
     }
 
@@ -60,10 +85,11 @@ impl Simulation {
     }
 
     fn arrive_workers(&mut self) {
-        for (i, worker) in self.workers.iter().skip(self.last_worker_arrived.unwrap_or(0) as usize).enumerate() {
-            if worker.arrival_time == self.cur_time {
+        for (i, worker) in self.workers.iter().enumerate() {
+            if worker.arrival_time < self.cur_time {
+                continue;
+            } else if worker.arrival_time == self.cur_time {
                 self.workers_waiting.push(i);
-                self.last_worker_arrived = Some(i as isize);
             } else{
                 break;
             }
@@ -71,15 +97,27 @@ impl Simulation {
     }
 
     fn update_elevators(&mut self) {
-        for elevator in self.elevators.iter_mut() {
+        for (elevator_index, elevator) in self.elevators.iter_mut().enumerate() {
             if elevator.time_left_in_action > 0 {
                 if elevator.state == ElevatorState::GroundFill { // if on ground, attempt to fill remaining space
-                    let available_space = ELEVATOR_CAPACITY - elevator.cur_workers.len();
+                    let mut available_space = ELEVATOR_CAPACITY - elevator.cur_workers.len();
                     let count = available_space.min(self.workers_waiting.len());
 
                     elevator
                         .cur_workers
-                        .extend(self.workers_waiting.drain(..count));
+                        .extend(self.workers_waiting.extract_if(.., |n| {
+                            if available_space == 0 {
+                                return false;
+                            }
+                            let worker = &self.workers[*n];
+                            if worker.elevator_assignment.is_none() || worker.elevator_assignment.unwrap() == elevator_index {
+                                available_space -= 1;
+                                true
+                            } else {
+                                false
+                            }
+                            
+                        }).take(count));
                 }
                 elevator.time_left_in_action -= 1;
             } else {
